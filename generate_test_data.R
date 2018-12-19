@@ -1,3 +1,4 @@
+#!/usr/bin/env Rscript
 randata=runif(10,-1,1)
 x=c(1:10)
 y=2*x+3*(randata/2)
