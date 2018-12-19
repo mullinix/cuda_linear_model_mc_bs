@@ -11,7 +11,7 @@ This code was written in support of academic research at by the publisher, who i
 Builds! Runs! Only tested on GNU/Linux:
 - Ubuntu 18.04 LTS: `uname -a` (kernel 4.15.0-39-generic)
 - NVCC/toolkit: `nvcc --version` Cuda compilation tools, release 9.1, V9.1.85
-- nVidia driver: `vnidia-smi` 396.54 
+- nVidia driver: `nvidia-smi` 396.54 
 - GNU Scientific Library: `dpkg -l libgsl*`
   - libgsl-dev, version: 2.4+dfsg-6
   - libgsl23, version: 2.4+dfsg-6
