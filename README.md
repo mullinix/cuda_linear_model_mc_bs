@@ -42,7 +42,8 @@ bin_RHS,bin_count
 A sample application `plot_hist.R` to plot the histogram is included. It is written in the `R` language, and depends on `ggplot2`.
 
 ## Test data
-A test data file is included, called `testdata.csv`.
+- Test data can be generated using `generate_test_data.R`.
+- A test data file is included, called `testdata.csv`.
 
 ## Legal
 License -- MIT. Use/Share away!
