@@ -20,11 +20,7 @@ void jack_knife(float xin[], float yin[], int n, float jack_theta[],
 	        float (*func)(float *, float *, int));
 float jack_knife_wrapper_slope(float xin[], float yin[], int n);
 	       
-__device__ void calc_BLUE_slope_intercept(float xin[], float yin[], int n, 
-			      float *slope_out, float *intercept_out);
-__device__ void calc_mean(float xin[], int n, float* mean);
-
-void calc_BLUE_slope_intercept_host(float xin[], float yin[], int n, 
+__host__ __device__ void calc_BLUE_slope_intercept(float xin[], float yin[], int n, 
 			      float *slope_out, float *intercept_out);
 
 // this GPU kernel function is used to initialize the random states 
@@ -267,7 +263,7 @@ int main(int argc, char *argv[]){
 	// sort to find median (also makes finding p_bias easy)
 	middle=my_median(h_slope,Nbs,0);
 	// calculate slope to find p_bias
-	calc_BLUE_slope_intercept_host(h_x,h_y,npts,&slope,&intercept);
+	calc_BLUE_slope_intercept(h_x,h_y,npts,&slope,&intercept);
 	printf("slope: %f, min: %f\n",slope,h_slope[0]);
 	// find #{theta*<theta}
 	for(i=0;i<Nbs && h_slope[i]<slope;i++);
@@ -398,35 +394,11 @@ void jack_knife(float xin[], float yin[], int n, float jack_theta[],
 
 float jack_knife_wrapper_slope(float xin[], float yin[], int n){
 	float discard,returnval;
-	calc_BLUE_slope_intercept_host(xin,yin,n,&returnval,&discard);
+	calc_BLUE_slope_intercept(xin,yin,n,&returnval,&discard);
 	return returnval;
 }
 
-__device__ void calc_mean(float xin[], int n, float* mean){
-	int i;
-	(*mean)=0;
-	for(i=0;i<n;i++){
-		(*mean)+=xin[i];
-	}
-	(*mean)/=n;
-}
-
-__device__ void calc_BLUE_slope_intercept(float xin[], float yin[], int n, 
-			      float *slope_out, float *intercept_out){
-	int i;
-	float Sx,Sy,Sx2,Sxy;
-	Sx=0; Sy=0;
-	Sx2=0; Sxy=0;
-	for(i=0;i<n;i++){
-		Sx +=xin[i];
-		Sy +=yin[i];
-		Sx2+=xin[i]*xin[i];
-		Sxy+=xin[i]*yin[i];
-	}
-	(*slope_out)=(n*Sxy-Sx*Sy)/(n*Sx2-Sx*Sx);
-	(*intercept_out)=(Sy/n)-(*slope_out)*(Sx/n);
-}
-void calc_BLUE_slope_intercept_host(float xin[], float yin[], int n, 
+__host__ __device__ void calc_BLUE_slope_intercept(float xin[], float yin[], int n, 
 			      float *slope_out, float *intercept_out){
 	int i;
 	float Sx,Sy,Sx2,Sxy;
