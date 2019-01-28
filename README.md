@@ -1,5 +1,5 @@
 # linboot
-CUDA-C (Monte-Carlo) non-parametric boostrap confidence intervals on the slope of a linear model
+CUDA-C (Monte-Carlo) non-parametric bootstrap confidence intervals on the slope of a linear model
 
 ## Introduction/Basics
 This software reads a comma-delimited input file of (x,y) pairs and computes percentile and BCa confidence intervals on the best-fit (BLUE) slope. It is fairly straight-forward to instead (or in addition) return the CIs for the intercept. Since CUDA does not allow dynamic memory allocation, the maximum length of the data are constrained to 100 points via a "#define" for easy adjustment.
