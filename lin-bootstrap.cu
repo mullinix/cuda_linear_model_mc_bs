@@ -33,8 +33,11 @@ __global__ void init_rand_kernel(unsigned int seed, curandState_t* states) {
 __global__ void mc_bs_slope_kernel(curandState_t* states, float d_x[], 
                             float d_y[], int n, int B, float d_slope[]){
 					
-	int idx_glob,i,elt_idx,ranval;
-	float boot_x[MAX_SAMPLE],boot_y[MAX_SAMPLE];
+	extern __shared__ float shared[];
+//	float boot_x[MAX_SAMPLE],boot_y[MAX_SAMPLE];
+        float *boot_x = &shared[0];
+        float *boot_y = &shared[n];
+        int idx_glob,i,elt_idx,ranval;
 	float slope,intercept;
 
 	int tot_threads=blockDim.x*gridDim.x;
@@ -59,11 +62,14 @@ __global__ void mc_bs_slope_kernel(curandState_t* states, float d_x[],
 __global__ void full_bs_slope_kernel(float d_x[], float d_y[], int n, int B,  
                                      float d_slope[]){
 					
-	int idx_glob,i,elt_idx,pop_idx,divided;
+	extern __shared__ float shared[];
+//	float boot_x[MAX_SAMPLE],boot_y[MAX_SAMPLE];
+        float *boot_x = &shared[0];
+        float *boot_y = &shared[n];
+        int idx_glob,i,elt_idx,pop_idx,divided;
 	unsigned long long int skip;
-	float boot_x[MAX_SAMPLE],boot_y[MAX_SAMPLE];
 	float slope,intercept;
-
+	
 	int tot_threads=blockDim.x*gridDim.x;
 
 	// global index corresponds to bootstrap iterate
@@ -196,6 +202,8 @@ int main(int argc, char *argv[]){
 	checkCUDAError("cudaMemcpy d_x to device");
 	cudaMemcpy(d_y,h_y,npts*sizeof(*h_y),cudaMemcpyHostToDevice);
 	checkCUDAError("cudaMemcpy d_y to device"); 
+
+        int block_memory_size = 2*npts*sizeof(*h_x);
 	
 	if(Nbs==(1<<20)){ // we perform MC-BS
 		// initialize random number generator on all blocks
@@ -215,7 +223,7 @@ int main(int argc, char *argv[]){
 		// run the bootstrap
 		// start timing 
 		cudaEventRecord(start, 0);
-		mc_bs_slope_kernel<<<num_blocks,thds_per_block>>>(states, d_x, d_y, npts, Nbs, d_slope);
+		mc_bs_slope_kernel<<<num_blocks,thds_per_block,block_memory_size>>>(states, d_x, d_y, npts, Nbs, d_slope);
 		// block until the device has completed
 		cudaDeviceSynchronize();
 		//calculate elapsed time:
@@ -229,7 +237,7 @@ int main(int argc, char *argv[]){
 		// run the bootstrap
 		// start timing 
 		cudaEventRecord(start, 0);
-		full_bs_slope_kernel<<<num_blocks,thds_per_block>>>(d_x, d_y, npts, Nbs, d_slope);
+		full_bs_slope_kernel<<<num_blocks,thds_per_block,block_memory_size>>>(d_x, d_y, npts, Nbs, d_slope);
 		// block until the device has completed
 		cudaDeviceSynchronize();
 		//calculate elapsed time:
