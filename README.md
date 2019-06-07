@@ -2,7 +2,7 @@
 CUDA-C (Monte-Carlo) non-parametric bootstrap confidence intervals on the slope of a linear model
 
 ## Introduction/Basics
-This software reads a comma-delimited input file of (x,y) pairs and computes percentile and BCa confidence intervals on the best-fit (BLUE) slope. It is fairly straight-forward to instead (or in addition) return the CIs for the intercept. Since CUDA does not allow dynamic memory allocation, the maximum length of the data are constrained to 100 points via a "#define" for easy adjustment.
+This software reads a comma-delimited input file of (x,y) pairs and computes percentile and BCa confidence intervals on the best-fit (BLUE) slope. It is fairly straight-forward to instead (or in addition) return the CIs for the intercept.
 
 ## Motivation
 This code was written in support of academic research by the publisher, who is a doctoral student in the Computational Science Research Center (CSRC), as part of a multidisciplinary project with the Viral Information Instute (VII). The CSRC and VII are both located at San Diego State University.
