@@ -203,7 +203,7 @@ int main(int argc, char *argv[]){
 		cudaEventRecord(start, 0);
 		init_rand_kernel<<<num_blocks,thds_per_block>>>(time(0),states);
 		// block until the device has completed
-		cudaThreadSynchronize();
+		cudaDeviceSynchronize();
 		//calculate elapsed time:
 		cudaEventRecord(stop, 0);
 		cudaEventSynchronize(stop);
@@ -217,7 +217,7 @@ int main(int argc, char *argv[]){
 		cudaEventRecord(start, 0);
 		mc_bs_slope_kernel<<<num_blocks,thds_per_block>>>(states, d_x, d_y, npts, Nbs, d_slope);
 		// block until the device has completed
-		cudaThreadSynchronize();
+		cudaDeviceSynchronize();
 		//calculate elapsed time:
 		cudaEventRecord(stop, 0);
 		cudaEventSynchronize(stop);
@@ -231,7 +231,7 @@ int main(int argc, char *argv[]){
 		cudaEventRecord(start, 0);
 		full_bs_slope_kernel<<<num_blocks,thds_per_block>>>(d_x, d_y, npts, Nbs, d_slope);
 		// block until the device has completed
-		cudaThreadSynchronize();
+		cudaDeviceSynchronize();
 		//calculate elapsed time:
 		cudaEventRecord(stop, 0);
 		cudaEventSynchronize(stop);
