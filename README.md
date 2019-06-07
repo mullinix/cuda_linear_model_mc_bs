@@ -1,21 +1,25 @@
 # linboot
-CUDA-C (Monte-Carlo) non-parametric boostrap confidence intervals on the slope of a linear model
+CUDA-C (Monte-Carlo) non-parametric bootstrap confidence intervals on the slope of a linear model
 
 ## Introduction/Basics
 This software reads a comma-delimited input file of (x,y) pairs and computes percentile and BCa confidence intervals on the best-fit (BLUE) slope. It is fairly straight-forward to instead (or in addition) return the CIs for the intercept. Since CUDA does not allow dynamic memory allocation, the maximum length of the data are constrained to 100 points via a "#define" for easy adjustment.
 
 ## Motivation
-This code was written in support of academic research at by the publisher, who is a doctoral student in the Computational Science Research Center (CSRC), as part of a multidisciplinary project with the Viral Information Instute (VII). The CSRC and VII are both located at San Diego State University.
+This code was written in support of academic research by the publisher, who is a doctoral student in the Computational Science Research Center (CSRC), as part of a multidisciplinary project with the Viral Information Instute (VII). The CSRC and VII are both located at San Diego State University.
 
 ## Build Status
-Builds! Runs! Only tested on GNU/Linux:
-- Ubuntu 18.04 LTS: `uname -a` (kernel 4.15.0-39-generic)
-- NVCC/toolkit: `nvcc --version` Cuda compilation tools, release 9.1, V9.1.85
-- nVidia driver: `nvidia-smi` 396.54 
-- GNU Scientific Library: `dpkg -l libgsl*`
-  - libgsl-dev, version: 2.4+dfsg-6
-  - libgsl23, version: 2.4+dfsg-6
-  - libgslcblas0, version: 2.4+dfsg-6
+New: Use a Docker container:
+- Docker repo: https://cloud.docker.com/u/mullinix/repository/docker/mullinix/nvidia-cuda-devel-gcc-gsl
+- Github repo: https://github.com/mullinix/docker_nvidia_cuda_devel_gcc_gsl
+
+*Builds! Runs! Tested on GNU/Linux:*
+- *Ubuntu 18.04 LTS: `uname -a` (kernel 4.15.0-39-generic)*
+- *NVCC/toolkit: `nvcc --version` Cuda compilation tools, release 9.1, V9.1.85*
+- *nVidia driver: `nvidia-smi` 396.54* 
+- *GNU Scientific Library: `dpkg -l libgsl*`*
+  - *libgsl-dev, version: 2.4+dfsg-6*
+  - *libgsl23, version: 2.4+dfsg-6*
+  - *libgslcblas0, version: 2.4+dfsg-6*
   
 ## Compiling
 A makefile is included.
