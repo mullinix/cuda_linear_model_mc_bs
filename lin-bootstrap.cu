@@ -10,7 +10,7 @@
 #include <curand_kernel.h>
 #include <unistd.h> // for time(NULL) call
 
-#define MAX_SAMPLE 100
+#define DEBUG 0
 
 // Simple utility function to check for CUDA runtime errors
 void checkCUDAError(const char* msg);
@@ -34,7 +34,6 @@ __global__ void mc_bs_slope_kernel(curandState_t* states, float d_x[],
                             float d_y[], int n, int B, float d_slope[]){
 					
 	extern __shared__ float shared[];
-//	float boot_x[MAX_SAMPLE],boot_y[MAX_SAMPLE];
         float *boot_x = &shared[0];
         float *boot_y = &shared[n];
         int idx_glob,i,elt_idx,ranval;
@@ -63,7 +62,6 @@ __global__ void full_bs_slope_kernel(float d_x[], float d_y[], int n, int B,
                                      float d_slope[]){
 					
 	extern __shared__ float shared[];
-//	float boot_x[MAX_SAMPLE],boot_y[MAX_SAMPLE];
         float *boot_x = &shared[0];
         float *boot_y = &shared[n];
         int idx_glob,i,elt_idx,pop_idx,divided;
@@ -259,10 +257,11 @@ int main(int argc, char *argv[]){
 	cudaEventSynchronize(stop);
 	checkCUDAError("cudaMemcpy d_slope,d_s to host");
 
+        cudaEventElapsedTime(&exectime, start, stop);
 	printf("CUDA: cudaMemcpy_bs time: %.5e\n",exectime*1e-3);
 	
 	/* evaluate SLOPE bootstrap results */
-	printf("--- Slope ---\n");
+	printf("--- Slope BS Results ---\n");
 	// BCa percentile procedure
 	// create jack-knife array of estimates for the slope
 	jack_knife(h_x,h_y,npts,jack_knife_array,jack_knife_wrapper_slope);
@@ -272,33 +271,41 @@ int main(int argc, char *argv[]){
 	middle=my_median(h_slope,Nbs,0);
 	// calculate slope to find p_bias
 	calc_BLUE_slope_intercept(h_x,h_y,npts,&slope,&intercept);
-	printf("slope: %f, min: %f\n",slope,h_slope[0]);
+	if(DEBUG)
+            printf("slope: %f, min: %f\n",slope,h_slope[0]);
 	// find #{theta*<theta}
 	for(i=0;i<Nbs && h_slope[i]<slope;i++);
 	// this is the probability used to find z0 from std normal
-	printf("#{theta*<theta}: %d\n",i);
+	if(DEBUG)
+            printf("#{theta*<theta}: %d\n",i);
 	p_bias = (float)i/Nbs;
-	printf("p_bias: %f\n", p_bias);
+	if(DEBUG)
+	    printf("p_bias: %f\n", p_bias);
 	z0=gsl_cdf_ugaussian_Pinv(p_bias);
-	printf("z0: %f\n", z0);
+	if(DEBUG)
+	    printf("z0: %f\n", z0);
 	// lower and upper x-values associated with alpha/2 area 
 	//     under left and right tails (respectively) of std normal
 	z_lower=gsl_cdf_ugaussian_Pinv(alpha*0.5);
 	z_upper=gsl_cdf_ugaussian_Qinv(alpha*0.5);
-	printf("zinvs: (%f,%f)\n", z_lower,z_upper);
+	if(DEBUG)
+	    printf("zinvs: (%f,%f)\n", z_lower,z_upper);
 	// finally, these are the alpha values associated with the BCa percentiles
 	BCa_alpha1=gsl_cdf_ugaussian_P(z0+(z0+z_lower)/(1-ahat*(z0+z_lower)));
 	BCa_alpha2=gsl_cdf_ugaussian_P(z0+(z0+z_upper)/(1-ahat*(z0+z_upper)));
-	printf("BCa_quantiles: (%f,%f)\n", BCa_alpha1,BCa_alpha2);
+	if(DEBUG)
+	    printf("BCa_quantiles: (%f,%f)\n", BCa_alpha1,BCa_alpha2);
 	// calculate BCa confidence intervals
 	lower_BCa=h_slope[(int)(BCa_alpha1*Nbs)];
 	upper_BCa=h_slope[(int)(BCa_alpha2*Nbs)];	
 	// make histogram
 	bin_width=(h_slope[Nbs-1]-h_slope[0])/hist_bins;
-	printf("bin size: %.7e (%.7e-%.7e)/%d\n",bin_width,h_slope[Nbs-1],h_slope[0],hist_bins);
+	if(DEBUG)
+	    printf("bin size: %.7e (%.7e-%.7e)/%d\n",bin_width,h_slope[Nbs-1],h_slope[0],hist_bins);
 	for(bin=0,i=0;bin<hist_bins;bin++){
 		hist_max[bin]=h_slope[0]+bin_width*(bin+1);
-		//printf("bin max: %.7e, slope[%d]: %e\n",hist_max[bin],i,h_slope[i]);
+	        if(DEBUG)
+		    printf("bin max: %.7e, slope[%d]: %e\n",hist_max[bin],i,h_slope[i]);
 		for(hist_counts[bin]=0;h_slope[i]<=hist_max[bin] && i<Nbs;i++,hist_counts[bin]++);
 	}
 	
@@ -341,9 +348,19 @@ int main(int argc, char *argv[]){
 		fprintf(opt_fptr,"%.7e,%d\n",hist_max[bin],hist_counts[bin]);
 	}
 	fclose(opt_fptr);
-	
-	printf("percentile:\t(%.7e,%.7e)\n BCa\t\t(%.7e,%.7e)\nMedian: %.7e, Mean: %.7e\n",
-	        lower_percentile,upper_percentile,lower_BCa,upper_BCa,middle,mean);
+        
+        printf("BLUE slope: %.7e\n", slope);
+        printf("Bootstrap\n");
+        printf(" - Median: %.7e\n", middle);
+        printf(" - %d%% CI (BCa): (%.7e,%.7e)\n", (int)((1.0-alpha)*100+0.5), lower_BCa, upper_BCa);
+        printf(" - Standard Error (Median): (%.7e,%.7e)\n", SE_lower, SE_upper);
+        printf(" - Mean: %.7e\n", mean);
+
+        if(DEBUG)
+            printf(" - Percentile %d%% CI (BCa): (%.7e,%.7e)\n", (int)((1.0-alpha)*100+0.5), lower_percentile, upper_percentile);
+        
+	/* printf("percentile:\t(%.7e,%.7e)\n BCa\t\t(%.7e,%.7e)\nMedian: %.7e, Mean: %.7e\n",
+	        lower_percentile,upper_percentile,lower_BCa,upper_BCa,middle,mean); */
 	
 		
 	free(h_slope);
