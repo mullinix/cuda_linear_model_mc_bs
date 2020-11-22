@@ -9,8 +9,8 @@ This code was written in support of academic research by the publisher, who is a
 
 ## Build Status
 New: Use a Docker container:
-- Docker repo: https://cloud.docker.com/u/mullinix/repository/docker/mullinix/nvidia-cuda-devel-gcc-gsl
-- Github repo: https://github.com/mullinix/docker_nvidia_cuda_devel_gcc_gsl
+- Docker repo: https://hub.docker.com/r/mullinix/linboot
+- Github repo: https://github.com/mullinix/docker_linboot
 
 *Builds! Runs! Tested on GNU/Linux:*
 - *Ubuntu 18.04 LTS: `uname -a` (kernel 4.15.0-39-generic)*
