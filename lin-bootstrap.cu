@@ -11,17 +11,39 @@
 #include <unistd.h> // for time(NULL) call
 
 #define DEBUG 0
+#define SLOPE 0
+#define INTERCEPT 1
+#define PEARSON_RHO 2
 
 // Simple utility function to check for CUDA runtime errors
 void checkCUDAError(const char* msg);
 
 float my_ahat(float xin[], int n);// calculate "a" for BCa acceleration
-void jack_knife(float xin[], float yin[], int n, float jack_theta[], 
-	        float (*func)(float *, float *, int));
-float jack_knife_wrapper_slope(float xin[], float yin[], int n);
+void jack_knife(float xin[], float yin[], int n, int variable, float jack_theta[], 
+	        float (*func)(float *, float *, int, int));
+float jack_knife_wrapper(float xin[], float yin[], int n, int variable);
+int stats_from_bs(
+	float x[],
+	float y[],
+	float alpha,
+	int npts,
+	int histbins,
+	int Nbs,
+	int res_idx,
+	float BS_data[],
+	float *median,
+	float *BCa_upper,
+	float *BCa_lower,
+	float *percentile_upper,
+	float *percentile_lower,
+	float *SE_upper,
+	float *SE_lower,
+	float hist_max[],
+	int hist_counts[],
+	float (*jk_func)(float *, float *, int, int)
+	);
 	       
-__host__ __device__ void calc_BLUE_slope_intercept(float xin[], float yin[], int n, 
-			      float *slope_out, float *intercept_out);
+__host__ __device__ void calc_BLUE_slope_intercept(float xin[], float yin[], int n, float results[]);
 
 // this GPU kernel function is used to initialize the random states 
 // source: http://cs.umw.edu/~finlayson/class/fall16/cpsc425/notes/cuda-random.html (accessed: 6/5/2017)
@@ -30,14 +52,17 @@ __global__ void init_rand_kernel(unsigned int seed, curandState_t* states) {
 }
 
 // main GPU kernel
-__global__ void mc_bs_slope_kernel(curandState_t* states, float d_x[], 
-                            float d_y[], int n, int B, float d_slope[]){
+__global__ void mc_bs_slope_kernel(
+	curandState_t* states,
+	float d_x[], float d_y[],
+	int n, int B,
+	float d_slope[], float d_intercept[], float d_pearson_rho[]){
 					
 	extern __shared__ float shared[];
         float *boot_x = &shared[0];
         float *boot_y = &shared[n];
         int idx_glob,i,elt_idx,ranval;
-	float slope,intercept;
+	float results[3];
 
 	int tot_threads=blockDim.x*gridDim.x;
 
@@ -52,21 +77,25 @@ __global__ void mc_bs_slope_kernel(curandState_t* states, float d_x[],
 			boot_y[i]=d_y[ranval];
 		}
 		// calculate BLUE slope and intercept
-		calc_BLUE_slope_intercept(boot_x,boot_y,n,&slope,&intercept);
+		calc_BLUE_slope_intercept(boot_x,boot_y,n,results);
 		// store results
-		d_slope[elt_idx]=slope;
+		d_slope[elt_idx]=results[SLOPE];
+		d_intercept[elt_idx]=results[INTERCEPT];
+		d_pearson_rho[elt_idx]=results[PEARSON_RHO];
 	}
 }
 // run full bootstrap!
-__global__ void full_bs_slope_kernel(float d_x[], float d_y[], int n, int B,  
-                                     float d_slope[]){
+__global__ void full_bs_slope_kernel(
+	float d_x[], float d_y[],
+	int n, int B,
+	float d_slope[], float d_intercept[], float d_pearson_rho[]){
 					
 	extern __shared__ float shared[];
         float *boot_x = &shared[0];
         float *boot_y = &shared[n];
         int idx_glob,i,elt_idx,pop_idx,divided;
 	unsigned long long int skip;
-	float slope,intercept;
+	float results[3];
 	
 	int tot_threads=blockDim.x*gridDim.x;
 
@@ -88,9 +117,11 @@ __global__ void full_bs_slope_kernel(float d_x[], float d_y[], int n, int B,
 			divided/=n;
 		}
 		// calculate BLUE slope and intercept
-		calc_BLUE_slope_intercept(boot_x,boot_y,n,&slope,&intercept);
+		calc_BLUE_slope_intercept(boot_x,boot_y,n,results);
 		// store results
-		d_slope[elt_idx]=slope;
+		d_slope[elt_idx]=results[SLOPE];
+		d_intercept[elt_idx]=results[INTERCEPT];
+		d_pearson_rho[elt_idx]=results[PEARSON_RHO];
 	}
 }
 
@@ -98,18 +129,17 @@ int main(int argc, char *argv[]){
 	int Nbs;
 	int thds_per_block = (1<<8);
 	int num_blocks = (1<<12);
-	int i,npts=0;
+	int bin,i,npts=0;
 	
 	int hist_bins=100;
-	int hist_counts[hist_bins],bin;
-	float hist_max[hist_bins],bin_width;
+	int hist_counts[hist_bins];
+	float hist_max[hist_bins];
 	
-	float alpha,mean,tmp,SE_median,SE_lower,SE_upper;
-	float *h_x,*d_x,*h_y,*d_y,*h_slope,*d_slope;
-	float lower_percentile,upper_percentile,middle,slope,intercept;
-	float BCa_alpha1,BCa_alpha2,z0,lower_BCa,upper_BCa,p_bias;
-	float z_lower,z_upper;
-	float *jack_knife_array,ahat;
+	float *h_x,*h_y,*h_slope,*h_intercept,*h_pearson_rho;
+	float *d_x,*d_y,*d_slope,*d_intercept,*d_pearson_rho;
+
+	float mean,SE_lower,SE_upper;
+	float lower_percentile,upper_percentile,middle,lower_BCa,upper_BCa;
 	
 	FILE * ipt_fptr;
 	FILE * opt_fptr;
@@ -117,6 +147,7 @@ int main(int argc, char *argv[]){
 	char ipt_fname[255];
 	char opt_fname[255];
 	char readin[255];
+	float alpha;
 	
 	curandState_t* states;
 	float exectime;
@@ -170,15 +201,22 @@ int main(int argc, char *argv[]){
 		printf("Could not allocate host bootstrap memory in %s!\n",argv[0]);
 		return -314;
 	}
+	// allocate bootstrap results array
+	h_intercept=(typeof(h_intercept))malloc(Nbs*sizeof(*h_intercept));
+	if(h_intercept==NULL){
+		printf("Could not allocate host bootstrap memory in %s!\n",argv[0]);
+		return -314;
+	}
+	// allocate bootstrap results array
+	h_pearson_rho=(typeof(h_pearson_rho))malloc(Nbs*sizeof(*h_pearson_rho));
+	if(h_pearson_rho==NULL){
+		printf("Could not allocate host bootstrap memory in %s!\n",argv[0]);
+		return -314;
+	}
 	// host values, read in from file
 	h_x=(typeof(h_x))malloc(npts*sizeof(*h_x));
 	h_y=(typeof(h_y))malloc(npts*sizeof(*h_y));
-	// jack_knife_array used in BCa
-	jack_knife_array=(typeof(jack_knife_array))malloc(npts*sizeof(*jack_knife_array));
-	if(h_x==NULL || h_y==NULL || jack_knife_array==NULL){
-		printf("Could not allocate host data memory in %s!\n",argv[0]);
-		return -314;
-	}
+
 	// read data into arrays
 	for(i=0;i<npts;i++){
 		fscanf(ipt_fptr,"%f,%f\n",&h_x[i],&h_y[i]);
@@ -194,6 +232,10 @@ int main(int argc, char *argv[]){
 	checkCUDAError("cudaMalloc states");
 	cudaMalloc((void**) &d_slope, Nbs * sizeof(*d_slope));
 	checkCUDAError("cudaMalloc d_slope");
+	cudaMalloc((void**) &d_intercept, Nbs * sizeof(*d_intercept));
+	checkCUDAError("cudaMalloc d_intercept");
+	cudaMalloc((void**) &d_pearson_rho, Nbs * sizeof(*d_pearson_rho));
+	checkCUDAError("cudaMalloc d_pearson_rho");
 
 	// store data
 	cudaMemcpy(d_x,h_x,npts*sizeof(*h_x),cudaMemcpyHostToDevice);
@@ -221,7 +263,7 @@ int main(int argc, char *argv[]){
 		// run the bootstrap
 		// start timing 
 		cudaEventRecord(start, 0);
-		mc_bs_slope_kernel<<<num_blocks,thds_per_block,block_memory_size>>>(states, d_x, d_y, npts, Nbs, d_slope);
+		mc_bs_slope_kernel<<<num_blocks,thds_per_block,block_memory_size>>>(states, d_x, d_y, npts, Nbs, d_slope, d_intercept, d_pearson_rho);
 		// block until the device has completed
 		cudaDeviceSynchronize();
 		//calculate elapsed time:
@@ -235,7 +277,7 @@ int main(int argc, char *argv[]){
 		// run the bootstrap
 		// start timing 
 		cudaEventRecord(start, 0);
-		full_bs_slope_kernel<<<num_blocks,thds_per_block,block_memory_size>>>(d_x, d_y, npts, Nbs, d_slope);
+		full_bs_slope_kernel<<<num_blocks,thds_per_block,block_memory_size>>>(d_x, d_y, npts, Nbs, d_slope, d_intercept, d_pearson_rho);
 		// block until the device has completed
 		cudaDeviceSynchronize();
 		//calculate elapsed time:
@@ -252,29 +294,163 @@ int main(int argc, char *argv[]){
 	cudaEventRecord(start, 0);
 	// copy device memory to host
 	cudaMemcpy(h_slope,d_slope,Nbs*sizeof(*d_slope),cudaMemcpyDeviceToHost);
+	cudaMemcpy(h_intercept,d_intercept,Nbs*sizeof(*d_intercept),cudaMemcpyDeviceToHost);
+	cudaMemcpy(h_pearson_rho,d_pearson_rho,Nbs*sizeof(*d_pearson_rho),cudaMemcpyDeviceToHost);
 	//calculate elapsed time:
 	cudaEventRecord(stop, 0);
 	cudaEventSynchronize(stop);
-	checkCUDAError("cudaMemcpy d_slope,d_s to host");
+	checkCUDAError("cudaMemcpy d_slope,d_intercept,d_pearson_rho to host");
 
         cudaEventElapsedTime(&exectime, start, stop);
 	printf("CUDA: cudaMemcpy_bs time: %.5e\n",exectime*1e-3);
 	
 	/* evaluate SLOPE bootstrap results */
 	printf("--- Slope BS Results ---\n");
+	sprintf(opt_fname,"%s-CI.dat",ipt_fname);
+	opt_fptr=fopen(opt_fname,"w");
+	if(opt_fptr==NULL){
+		printf("Could not open %s for writing!\n",opt_fname);
+		return -1414;
+	}
+	fprintf(opt_fptr, "statistic,lower_pctile,upper_pctile,lower_BCa,upper_BCa,lower_SE,upper_SE,median,mean,data_size,bootstrap_samples\n");
+	fclose(opt_fptr);
+
 	// BCa percentile procedure
+	float *BS_map[3] = {h_slope, h_intercept, h_pearson_rho};
+	const char *stat_map[3] = {"slope", "intercept", "pearson_rho"};
+	float results[3];
+	calc_BLUE_slope_intercept(h_x,h_y,npts,results);
+	for(int variable=0; variable<3; variable++){
+		stats_from_bs(
+			//inputs
+			h_x, h_y, alpha, npts, hist_bins, Nbs, variable, BS_map[variable], 
+			//scalar outputs
+			&middle, &upper_BCa, &lower_BCa, &upper_percentile, &lower_percentile, &SE_upper, &SE_lower,
+			//histogram outputs
+			hist_max, hist_counts,
+			// jackknife function pointer
+			jack_knife_wrapper
+		);
+
+		// write percentile data to file
+		sprintf(opt_fname,"%s-CI.dat",ipt_fname);
+		opt_fptr=fopen(opt_fname,"a");
+		if(opt_fptr==NULL){
+			printf("Could not open %s for writing!\n",opt_fname);
+			return -1414;
+		}
+		mean=my_mean(BS_map[variable],Nbs);
+		fprintf(opt_fptr,"%s,%.7e,%.7e,%.7e,%.7e,%.7e,%.7e,%.7e,%.7e,%d,%d\n",
+				stat_map[variable],lower_percentile,upper_percentile,lower_BCa,upper_BCa,
+				SE_lower,SE_upper,middle,mean,npts,Nbs);
+		fclose(opt_fptr);
+		
+		// write histogram data to file
+		sprintf(opt_fname,"%s-%s-histogram.dat",ipt_fname,stat_map[variable]);
+		opt_fptr=fopen(opt_fname,"w");
+		if(opt_fptr==NULL){
+			printf("Could not open %s for writing!\n",opt_fname);
+			return -1414;
+		}
+		for(bin=0;bin<hist_bins;bin++){
+			fprintf(opt_fptr,"%.7e,%d\n",hist_max[bin],hist_counts[bin]);
+		}
+		fclose(opt_fptr);
+		
+		printf("BLUE %s: %.7e\n", stat_map[variable], results[variable]);
+		printf("Bootstrap\n");
+		printf(" - Median: %.7e\n", middle);
+		printf(" - %d%% CI (BCa): (%.7e,%.7e)\n", (int)((1.0-alpha)*100+0.5), lower_BCa, upper_BCa);
+		printf(" - Standard Error (Median): (%.7e,%.7e)\n", SE_lower, SE_upper);
+		printf(" - Mean: %.7e\n", mean);
+
+		if(DEBUG)
+		    printf(" - Percentile %d%% CI: (%.7e,%.7e)\n", (int)((1.0-alpha)*100+0.5), lower_percentile, upper_percentile);
+	}
+		
+	
+		
+	free(h_slope);
+	free(h_intercept);
+	free(h_pearson_rho);
+	free(h_x);
+	free(h_y);
+
+	
+	cudaFree(d_slope);
+	cudaFree(d_intercept);
+	cudaFree(d_pearson_rho);
+	cudaFree(d_x);
+	cudaFree(d_y);
+	cudaFree(states);	
+	
+    return 0;
+}
+
+int stats_from_bs(
+	float x[],
+	float y[],
+	float alpha,
+	int npts,
+	int hist_bins,
+	int Nbs,
+	int res_idx,
+	float BS_data[],
+	float *median,
+	float *BCa_upper,
+	float *BCa_lower,
+	float *percentile_upper,
+	float *percentile_lower,
+	float *SE_upper,
+	float *SE_lower,
+	float hist_max[],
+	int hist_counts[],
+	float (*jk_func)(float *, float *, int, int)
+	){
+	/*
+	stats_from_bs
+	
+	Args:
+	    x: independent variable data
+	    y: dependent variable data
+	    alpha: confidence level
+	    npts: number of data points in x,y
+	    hist_bins: number of histogram bins to compute
+	    Nbs: size of bootstrap array
+	    res_idx: which result index to use (slope=SLOPE, intercept=INTERCEPT, pearson_rho=PEARSON_RHO)
+	    BS_data: bootstrap data array
+	    jk_func: function pointer for jack-knife function
+
+	Outputs:
+	    median, BCa_upper/lower, SE_upper/lower, percentile_upper/lower: output data pointers
+	    hist_max: array where we store the histogram bin RHS value
+	    hist_counts: array where we store the histogram counts
+	    returns: 0
+	    
+	*/
+	float lower_percentile,upper_percentile,middle,lower_SE,upper_SE,lower_BCa,upper_BCa;
+	float ahat,BCa_alpha1,BCa_alpha2,z0,p_bias,z_lower,z_upper;
+	float *jack_knife_array;
+	float results[3];
+	int bin,i;
+	float bin_width;
+	float tmp,SE_median;
+	// jack_knife_array used in BCa
+	jack_knife_array=(typeof(jack_knife_array))malloc(npts*sizeof(*jack_knife_array));
+	if(jack_knife_array==NULL){
+		printf("Could not allocate jackknife memory!\n");
+		return -314;
+	}
 	// create jack-knife array of estimates for the slope
-	jack_knife(h_x,h_y,npts,jack_knife_array,jack_knife_wrapper_slope);
+	jack_knife(x,y,npts,res_idx,jack_knife_array,jk_func);
 	// calculate ahat
 	ahat=my_ahat(jack_knife_array,npts);
 	// sort to find median (also makes finding p_bias easy)
-	middle=my_median(h_slope,Nbs,0);
+	middle=my_median(BS_data,Nbs,0);
 	// calculate slope to find p_bias
-	calc_BLUE_slope_intercept(h_x,h_y,npts,&slope,&intercept);
-	if(DEBUG)
-            printf("slope: %f, min: %f\n",slope,h_slope[0]);
+	calc_BLUE_slope_intercept(x,y,npts,results);
 	// find #{theta*<theta}
-	for(i=0;i<Nbs && h_slope[i]<slope;i++);
+	for(i=0;i<Nbs && BS_data[i]<results[res_idx];i++);
 	// this is the probability used to find z0 from std normal
 	if(DEBUG)
             printf("#{theta*<theta}: %d\n",i);
@@ -296,84 +472,44 @@ int main(int argc, char *argv[]){
 	if(DEBUG)
 	    printf("BCa_quantiles: (%f,%f)\n", BCa_alpha1,BCa_alpha2);
 	// calculate BCa confidence intervals
-	lower_BCa=h_slope[(int)(BCa_alpha1*Nbs)];
-	upper_BCa=h_slope[(int)(BCa_alpha2*Nbs)];	
+	lower_BCa=BS_data[(int)(BCa_alpha1*Nbs)];
+	upper_BCa=BS_data[(int)(BCa_alpha2*Nbs)];	
 	// make histogram
-	bin_width=(h_slope[Nbs-1]-h_slope[0])/hist_bins;
+	bin_width=(BS_data[Nbs-1]-BS_data[0])/hist_bins;
 	if(DEBUG)
-	    printf("bin size: %.7e (%.7e-%.7e)/%d\n",bin_width,h_slope[Nbs-1],h_slope[0],hist_bins);
+	    printf("bin size: %.7e (%.7e-%.7e)/%d\n",bin_width,BS_data[Nbs-1],BS_data[0],hist_bins);
 	for(bin=0,i=0;bin<hist_bins;bin++){
-		hist_max[bin]=h_slope[0]+bin_width*(bin+1);
+		hist_max[bin]=BS_data[0]+bin_width*(bin+1);
 	        if(DEBUG)
-		    printf("bin max: %.7e, slope[%d]: %e\n",hist_max[bin],i,h_slope[i]);
-		for(hist_counts[bin]=0;h_slope[i]<=hist_max[bin] && i<Nbs;i++,hist_counts[bin]++);
+		    printf("bin max: %.7e, data[%d]: %e\n",hist_max[bin],i,BS_data[i]);
+		for(hist_counts[bin]=0;BS_data[i]<=hist_max[bin] && i<Nbs;i++,hist_counts[bin]++);
 	}
 	
 	// non-bias-corrected percentiles
-	lower_percentile=h_slope[(int)((alpha*0.5)*Nbs)];
-	upper_percentile=h_slope[(int)((1.0-alpha*0.5)*Nbs)];
+	lower_percentile=BS_data[(int)((alpha*0.5)*Nbs)];
+	upper_percentile=BS_data[(int)((1.0-alpha*0.5)*Nbs)];
 	
 	// SE(median)
 	SE_median=0;
 	for(i=0;i<Nbs;i++){
-		tmp=h_slope[i]-middle;
+		tmp=BS_data[i]-middle;
 		SE_median+=tmp*tmp;
 	}
 	SE_median/=(Nbs-1);
 	SE_median=sqrt(SE_median);
-	SE_lower=middle-SE_median;
-	SE_upper=middle+SE_median;
-		
-	// write percentile data to file
-	sprintf(opt_fname,"%s-slope-CI.dat",ipt_fname);
-	opt_fptr=fopen(opt_fname,"w");
-	if(opt_fptr==NULL){
-		printf("Could not open %s for writing!\n",opt_fname);
-		return -1414;
-	}
-	mean=my_mean(h_slope,Nbs);
-	fprintf(opt_fptr,"%.7e,%.7e,%.7e,%.7e,%.7e,%.7e,%.7e,%.7e,%d,%d\n",
-			lower_percentile,upper_percentile,lower_BCa,upper_BCa,
-			SE_lower,SE_upper,middle,mean,npts,Nbs);
-	fclose(opt_fptr);
-	
-	// write histogram data to file
-	sprintf(opt_fname,"%s-slope-histogram.dat",ipt_fname);
-	opt_fptr=fopen(opt_fname,"w");
-	if(opt_fptr==NULL){
-		printf("Could not open %s for writing!\n",opt_fname);
-		return -1414;
-	}
-	for(bin=0;bin<hist_bins;bin++){
-		fprintf(opt_fptr,"%.7e,%d\n",hist_max[bin],hist_counts[bin]);
-	}
-	fclose(opt_fptr);
-        
-        printf("BLUE slope: %.7e\n", slope);
-        printf("Bootstrap\n");
-        printf(" - Median: %.7e\n", middle);
-        printf(" - %d%% CI (BCa): (%.7e,%.7e)\n", (int)((1.0-alpha)*100+0.5), lower_BCa, upper_BCa);
-        printf(" - Standard Error (Median): (%.7e,%.7e)\n", SE_lower, SE_upper);
-        printf(" - Mean: %.7e\n", mean);
-
-        if(DEBUG)
-            printf(" - Percentile %d%% CI (BCa): (%.7e,%.7e)\n", (int)((1.0-alpha)*100+0.5), lower_percentile, upper_percentile);
-        
-	/* printf("percentile:\t(%.7e,%.7e)\n BCa\t\t(%.7e,%.7e)\nMedian: %.7e, Mean: %.7e\n",
-	        lower_percentile,upper_percentile,lower_BCa,upper_BCa,middle,mean); */
-	
-		
-	free(h_slope);
-	free(h_x);
-	free(h_y);
+	lower_SE=middle-SE_median;
+	upper_SE=middle+SE_median;
+	// assign output values
+	*median = middle;
+	*BCa_lower = lower_BCa;
+	*BCa_upper = upper_BCa;
+	*SE_lower = lower_SE;
+	*SE_upper = upper_SE;
+	*percentile_lower = lower_percentile;
+	*percentile_upper = upper_percentile;
+	// cleanup malloc'd memory
 	free(jack_knife_array);
-	
-	cudaFree(d_slope);
-	cudaFree(d_x);
-	cudaFree(d_y);
-	cudaFree(states);	
-	
-    return 0;
+	return 0;
 }
 
 float my_ahat(float xin[], int n){
@@ -399,8 +535,8 @@ float my_ahat(float xin[], int n){
 	return ahat;
 }
 
-void jack_knife(float xin[], float yin[], int n, float jack_theta[], 
-	       float (*func)(float *, float *, int)){
+void jack_knife(float xin[], float yin[], int n, int variable, float jack_theta[], 
+	       float (*func)(float *, float *, int, int)){
 	int i,j;
 	float popA[n],popB[n];
 	for(i=0;i<n;i++){
@@ -413,30 +549,48 @@ void jack_knife(float xin[], float yin[], int n, float jack_theta[],
 		popA[i]=xin[n-1];
 		popB[i]=yin[n-1];
 		// calculate func for this iteration
-		jack_theta[i]=func(popA,popB,n-1);
+		jack_theta[i]=func(popA,popB,n-1,variable);
 	}
 }
 
-float jack_knife_wrapper_slope(float xin[], float yin[], int n){
-	float discard,returnval;
-	calc_BLUE_slope_intercept(xin,yin,n,&returnval,&discard);
-	return returnval;
+float jack_knife_wrapper(float xin[], float yin[], int n, int variable){
+	float results[3];
+	calc_BLUE_slope_intercept(xin,yin,n,results);
+	return results[variable];
 }
 
-__host__ __device__ void calc_BLUE_slope_intercept(float xin[], float yin[], int n, 
-			      float *slope_out, float *intercept_out){
+__host__ __device__ void calc_BLUE_slope_intercept(
+	float xin[], float yin[], int n, float results[]
+	){
 	int i;
-	float Sx,Sy,Sx2,Sxy;
+	float Sx,Sy,Sx2,Sxy,slope,intercept,pearson_rho;
+	float sd_x,sd_y,x_bar,y_bar,x,y;
 	Sx=0; Sy=0;
 	Sx2=0; Sxy=0;
+	sd_x=0; sd_y=0;
+	x_bar=0; y_bar=0;
+	x=0; y=0;
 	for(i=0;i<n;i++){
 		Sx +=xin[i];
 		Sy +=yin[i];
 		Sx2+=xin[i]*xin[i];
 		Sxy+=xin[i]*yin[i];
 	}
-	(*slope_out)=(n*Sxy-Sx*Sy)/(n*Sx2-Sx*Sx);
-	(*intercept_out)=(Sy/n)-(*slope_out)*(Sx/n);
+	x_bar=Sx/n; y_bar=Sy/n;
+	for(i=0;i<n;i++){
+		x=xin[i]-x_bar;
+		y=yin[i]-y_bar;
+		sd_x+=x*x;
+		sd_y+=y*y;
+	}
+	sd_x = sqrt(sd_x/(n-1));
+	sd_y = sqrt(sd_y/(n-1));
+	slope=(n*Sxy-Sx*Sy)/(n*Sx2-Sx*Sx);
+	intercept=(Sy/n)-slope*(Sx/n);
+	pearson_rho=(Sxy-n*x_bar*y_bar)/((n-1)*sd_x*sd_y);
+	results[SLOPE] = slope;
+	results[INTERCEPT] = intercept;
+	results[PEARSON_RHO] = pearson_rho;
 }
 
 void checkCUDAError(const char *msg){
