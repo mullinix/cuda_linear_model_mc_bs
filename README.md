@@ -2,7 +2,7 @@
 CUDA-C (Monte-Carlo) non-parametric bootstrap confidence intervals on the slope of a linear model
 
 ## Introduction/Basics
-This software reads a comma-delimited input file of (x,y) pairs and computes percentile and BCa confidence intervals on the best-fit (BLUE) slope. It is fairly straight-forward to instead (or in addition) return the CIs for the intercept.
+This software reads a comma-delimited input file of (x,y) pairs and computes percentile and BCa confidence intervals on the best-fit (BLUE) slope, intercept, and calculates the Pearson correlation coefficient rho.
 
 ## Motivation
 This code was written in support of academic research by the publisher, who is a doctoral student in the Computational Science Research Center (CSRC), as part of a multidisciplinary project with the Viral Information Instute (VII). The CSRC and VII are both located at San Diego State University.
@@ -33,11 +33,11 @@ make
 ```
 
 ## Output
-The output includes a text file `<filename>-slope-CI.dat` which lists the results in a comma-separated list of the following:
+The output includes a text file `<filename>-CI.dat` which lists the results in a comma-separated list of the following:
 ```
-lower_percentile,upper_percentile,lower_BCa,upper_BCa,SE_lower,SE_upper,median,mean,#pts,#bs_iterations
+statistic,lower_percentile,upper_percentile,lower_BCa,upper_BCa,SE_lower,SE_upper,median,mean,#pts,#bs_iterations
 ```
-as well as a text file `<filename>-slope-histogram.dat` containing comma-separated histogram data, as
+as well as a text file `<filename>-<statistic>-histogram.dat` containing comma-separated histogram data, as
 ```
 bin_RHS,bin_count
 ```
